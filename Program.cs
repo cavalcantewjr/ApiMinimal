@@ -1,7 +1,11 @@
 using ApiMinimal.Data;
 using ApiMinimal.Models;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using MiniValidation;
+using NetDevPack.Identity.Jwt;
+using NetDevPack.Identity.Model;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,6 +16,13 @@ builder.Services.AddDbContext<MinimalContextDb>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"))
     );
 
+builder.Services.AddIdentityEntityFrameworkContextConfiguration(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"),
+    b => b.MigrationsAssembly("ApiMinimal")));
+
+builder.Services.AddIdentityConfiguration();
+builder.Services.AddJwtConfiguration(builder.Configuration, "appSettings");
+
 var app = builder.Build();
 
 
@@ -21,7 +32,91 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+app.UseAuthConfiguration();
 app.UseHttpsRedirection();
+
+app.MapPost("/registro", async (
+    SignInManager<IdentityUser> signInManager,
+    UserManager<IdentityUser> userManager,
+    IOptions<AppJwtSettings> appJwtSettings,
+    RegisterUser registerUser) =>
+{
+    if (registerUser == null)
+        return Results.BadRequest("Usuário não encontrado.");
+
+    if (MiniValidator.TryValidate(registerUser, out var erros))
+        return Results.ValidationProblem(erros);
+
+    var user = new IdentityUser
+    {
+        UserName = registerUser.Email,
+        Email = registerUser.Email,
+        EmailConfirmed = true
+    };
+
+    var result = await userManager.CreateAsync(user, registerUser.Password);
+
+    if (!result.Succeeded)
+        return Results.BadRequest(result.Errors);
+
+    var jwt = new JwtBuilder()
+                .WithUserManager(userManager)
+                .WithJwtSettings(appJwtSettings.Value)
+                .WithEmail(registerUser.Email)
+                .WithJwtClaims()
+                .WithUserClaims()
+                .WithUserRoles()
+                .BuildUserResponse();
+
+    return Results.Ok(jwt);
+
+})
+    .ProducesValidationProblem()
+    .Produces(StatusCodes.Status200OK)
+    .Produces(StatusCodes.Status400BadRequest)
+    .WithName("RegistrarUsuario")
+    .WithTags("Usuario");
+
+
+app.MapPost("/login", async (
+    SignInManager<IdentityUser> signInManager,
+    UserManager<IdentityUser> userManager,
+    IOptions<AppJwtSettings> appJwtSettings,
+    LoginUser loginUser) =>
+{
+    if (loginUser == null)
+        return Results.BadRequest("Usuário não encontrado.");
+
+    if (MiniValidator.TryValidate(loginUser, out var erros))
+        return Results.ValidationProblem(erros);
+
+    var result = await signInManager.PasswordSignInAsync(loginUser.Email, loginUser.Password, true, true);
+
+    if (result.IsLockedOut)
+        return Results.BadRequest("Usuário bloqueado.");
+
+    if (result.Succeeded)
+        return Results.BadRequest("Usuário ou senha inválidos.");
+
+    var jwt = new JwtBuilder()
+                .WithUserManager(userManager)
+                .WithJwtSettings(appJwtSettings.Value)
+                .WithEmail(loginUser.Email)
+                .WithJwtClaims()
+                .WithUserClaims()
+                .WithUserRoles()
+                .BuildUserResponse();
+
+    return Results.Ok(jwt);
+
+})
+    .ProducesValidationProblem()
+    .Produces(StatusCodes.Status200OK)
+    .Produces(StatusCodes.Status400BadRequest)
+    .WithName("RegistrarUsuario")
+    .WithTags("Usuario");
+
+
 
 app.MapGet("/fornecedor", async (
     MinimalContextDb context) =>
