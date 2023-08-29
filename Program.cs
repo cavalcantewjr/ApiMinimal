@@ -1,8 +1,10 @@
 using ApiMinimal.Data;
 using ApiMinimal.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Microsoft.OpenApi.Models;
 using MiniValidation;
 using NetDevPack.Identity.Jwt;
 using NetDevPack.Identity.Model;
@@ -10,7 +12,7 @@ using NetDevPack.Identity.Model;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+
 
 builder.Services.AddDbContext<MinimalContextDb>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"))
@@ -22,6 +24,48 @@ builder.Services.AddIdentityEntityFrameworkContextConfiguration(options =>
 
 builder.Services.AddIdentityConfiguration();
 builder.Services.AddJwtConfiguration(builder.Configuration, "appSettings");
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("ExcluirFornecedor",
+        policy => policy.RequireClaim("ExcluirFornecedor"));
+});
+
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "Minimal API Sample",
+        Description = "Developed by Washington Cavalcante learning Eduardo Pires / desenvolvedor.io",
+        Contact = new OpenApiContact { Name = "Washington Cavalcante", Email = "cavalcantewjr@gmail.com" },
+        License = new OpenApiLicense { Name = "MIT", Url = new Uri("https://opensource.org/licenses/MIT") }
+    });
+
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "Insira o token JWT desta maneira: Bearer {seu JWS}",
+        Name = "Authorization",
+        Scheme = "Bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey
+    });
+
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            new string[] {}
+        }
+    });
+});
 
 var app = builder.Build();
 
@@ -35,7 +79,7 @@ if (app.Environment.IsDevelopment())
 app.UseAuthConfiguration();
 app.UseHttpsRedirection();
 
-app.MapPost("/registro", async (
+app.MapPost("/registro", [AllowAnonymous] async (
     SignInManager<IdentityUser> signInManager,
     UserManager<IdentityUser> userManager,
     IOptions<AppJwtSettings> appJwtSettings,
@@ -44,7 +88,7 @@ app.MapPost("/registro", async (
     if (registerUser == null)
         return Results.BadRequest("Usuário não encontrado.");
 
-    if (MiniValidator.TryValidate(registerUser, out var erros))
+    if (!MiniValidator.TryValidate(registerUser, out var erros))
         return Results.ValidationProblem(erros);
 
     var user = new IdentityUser
@@ -62,7 +106,7 @@ app.MapPost("/registro", async (
     var jwt = new JwtBuilder()
                 .WithUserManager(userManager)
                 .WithJwtSettings(appJwtSettings.Value)
-                .WithEmail(registerUser.Email)
+                .WithEmail(user.Email)
                 .WithJwtClaims()
                 .WithUserClaims()
                 .WithUserRoles()
@@ -78,7 +122,7 @@ app.MapPost("/registro", async (
     .WithTags("Usuario");
 
 
-app.MapPost("/login", async (
+app.MapPost("/login", [AllowAnonymous] async (
     SignInManager<IdentityUser> signInManager,
     UserManager<IdentityUser> userManager,
     IOptions<AppJwtSettings> appJwtSettings,
@@ -87,7 +131,7 @@ app.MapPost("/login", async (
     if (loginUser == null)
         return Results.BadRequest("Usuário não encontrado.");
 
-    if (MiniValidator.TryValidate(loginUser, out var erros))
+    if (!MiniValidator.TryValidate(loginUser, out var erros))
         return Results.ValidationProblem(erros);
 
     var result = await signInManager.PasswordSignInAsync(loginUser.Email, loginUser.Password, true, true);
@@ -95,7 +139,7 @@ app.MapPost("/login", async (
     if (result.IsLockedOut)
         return Results.BadRequest("Usuário bloqueado.");
 
-    if (result.Succeeded)
+    if (!result.Succeeded)
         return Results.BadRequest("Usuário ou senha inválidos.");
 
     var jwt = new JwtBuilder()
@@ -113,18 +157,18 @@ app.MapPost("/login", async (
     .ProducesValidationProblem()
     .Produces(StatusCodes.Status200OK)
     .Produces(StatusCodes.Status400BadRequest)
-    .WithName("RegistrarUsuario")
+    .WithName("LoginUsuario")
     .WithTags("Usuario");
 
 
 
-app.MapGet("/fornecedor", async (
+app.MapGet("/fornecedor", [AllowAnonymous] async (
     MinimalContextDb context) =>
     await context.Fornecedores.ToListAsync())
     .WithName("GetFornecedor")
     .WithTags("Fornecedor");
 
-app.MapGet("/fornecedor/{id}", async (
+app.MapGet("/fornecedor/{id}", [Authorize] async (
     Guid id,
     MinimalContextDb context) =>
 
@@ -137,7 +181,7 @@ app.MapGet("/fornecedor/{id}", async (
     .WithName("GetFornecedorPorId")
     .WithTags("Fornecedor");
 
-app.MapPost("/fornecedor", async (
+app.MapPost("/fornecedor", [Authorize] async (
     MinimalContextDb context,
     Fornecedor fornecedor
     ) =>
@@ -157,7 +201,7 @@ app.MapPost("/fornecedor", async (
     .WithName("PostFornecedor")
     .WithTags("Fornecedor");
 
-app.MapPut("fornecedor/{id}", async (
+app.MapPut("fornecedor/{id}", [Authorize] async (
     Guid id,
     MinimalContextDb context,
     Fornecedor fornecedor) =>
@@ -181,7 +225,7 @@ app.MapPut("fornecedor/{id}", async (
     .WithName("PutFornecedor")
     .WithTags("Fornecedor");
 
-app.MapDelete("fornecedor/{id}", async (
+app.MapDelete("fornecedor/{id}", [Authorize] async (
     Guid id,
     MinimalContextDb context) =>
 {
@@ -199,6 +243,7 @@ app.MapDelete("fornecedor/{id}", async (
     .Produces<Fornecedor>(StatusCodes.Status404NotFound)
     .Produces<Fornecedor>(StatusCodes.Status204NoContent)
     .Produces<Fornecedor>(StatusCodes.Status400BadRequest)
+    .RequireAuthorization("ExcluirFornecedor")
     .WithName("DeleteFornecedor")
     .WithTags("Fornecedor");
 
